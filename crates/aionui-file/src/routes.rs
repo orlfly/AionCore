@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
 use tower::ServiceExt;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeFile;
@@ -14,10 +15,10 @@ use tower_http::services::ServeFile;
 use aionui_api_types::{
     ApiResponse, ContentMetadataRequest, CopyFilesRequest, CopyFilesResponse, DirOrFileResponse,
     FetchRemoteImageRequest, FileChangeInfoResponse, FileMetadataResponse, GetFileMetadataRequest,
-    GetFilesByDirRequest, GetImageBase64Request, ListWorkspaceFilesRequest, OpenSystemFileRequest, ReadContentRequest,
-    ReadFileRequest, RevealItemRequest, SnapshotBaselineRequest, SnapshotCompareResponse, SnapshotDiscardRequest,
-    SnapshotInfoResponse, SnapshotStageRequest, SnapshotWorkspaceRequest, StreamQuery, WorkspaceFlatFileResponse,
-    WriteContentRequest, WriteFileRequest,
+    GetFilesByDirRequest, GetImageBase64Request, KaneoWorkspaceRequest, ListWorkspaceFilesRequest,
+    OpenSystemFileRequest, ReadContentRequest, ReadFileRequest, RevealItemRequest, SnapshotBaselineRequest,
+    SnapshotCompareResponse, SnapshotDiscardRequest, SnapshotInfoResponse, SnapshotStageRequest,
+    SnapshotWorkspaceRequest, StreamQuery, WorkspaceFlatFileResponse, WriteContentRequest, WriteFileRequest,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::ApiError;
@@ -135,6 +136,7 @@ pub fn file_routes(state: FileRouterState) -> Router {
         .route("/api/fs/metadata", post(get_file_metadata))
         .route("/api/fs/read", post(read_file))
         .route("/api/fs/write", post(write_file))
+        .route("/api/fs/kaneo-workspace", post(ensure_kaneo_workspace))
         .route("/api/fs/copy", post(copy_files))
         .route("/api/fs/reveal", post(reveal_item))
         .route("/api/fs/open-system", post(open_system_file))
@@ -232,6 +234,68 @@ async fn write_file(
         .write_file_for_user(&user.id, &req.path, req.data.as_bytes(), &workspace)
         .await?;
     Ok(Json(ApiResponse::ok(ok)))
+}
+
+/// `POST /api/fs/kaneo-workspace` — create (if missing) and return the
+/// absolute path of the Kaneo per-project per-role workspace directory
+/// `{managed_root}/kaneo-workspaces/<project_slug>/<role>/`. The managed
+/// root is the first allowed root under which a `kaneo-workspaces` directory
+/// can live (the backend data dir when it is on the allowlist, else the home
+/// root). Slugs/roles are validated as single path components so the layout
+/// cannot be escaped.
+async fn ensure_kaneo_workspace(
+    State(state): State<FileRouterState>,
+    Extension(_user): Extension<CurrentUser>,
+    body: Result<Json<KaneoWorkspaceRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<String>>, ApiError> {
+    let Json(req) = body.map_err(ApiError::from)?;
+    let path = kaneo_workspace_root(&state.allowed_roots, &req.project_slug, &req.role)?;
+    tokio::fs::create_dir_all(&path)
+        .await
+        .map_err(|e| ApiError::Internal(format!("cannot create kaneo workspace: {e}")))?;
+    Ok(Json(ApiResponse::ok(path.to_string_lossy().into_owned())))
+}
+
+/// Validate a directory segment: a single, non-hidden, non-empty path
+/// component with no separators or traversal characters.
+fn validate_kaneo_segment(value: &str, field: &'static str) -> Result<(), ApiError> {
+    let invalid = || ApiError::BadRequest(format!("invalid kaneo workspace {field}"));
+    if value.is_empty()
+        || value.len() > 96
+        || value.starts_with('.')
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains("..")
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// Resolve the kaneo workspace directory for `(project_slug, role)` without
+/// creating it. Picks the managed root deterministically from the allowed
+/// roots so every call site agrees on one root.
+fn kaneo_workspace_root(
+    allowed_roots: &[std::path::PathBuf],
+    project_slug: &str,
+    role: &str,
+) -> Result<PathBuf, ApiError> {
+    validate_kaneo_segment(project_slug, "project slug")?;
+    let role = role.to_string();
+    validate_kaneo_segment(&role, "role")?;
+
+    // Prefer a root whose name looks like the data dir (ends with `.aionui`),
+    // else the home root, else the first root. Canonicalize when possible.
+    let root = allowed_roots
+        .iter()
+        .find(|r| r.file_name().map(|n| n.to_string_lossy().ends_with(".aionui")).unwrap_or(false))
+        .or_else(|| allowed_roots.iter().find(|r| r.starts_with(dirs::home_dir().unwrap_or_default())))
+        .or_else(|| allowed_roots.first())
+        .ok_or_else(|| ApiError::BadRequest("no allowed root for kaneo workspaces".to_owned()))?;
+    Ok(root.join("kaneo-workspaces").join(project_slug).join(&role))
 }
 
 async fn copy_files(

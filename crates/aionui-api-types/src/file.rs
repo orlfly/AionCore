@@ -154,6 +154,17 @@ pub struct CopyFilesRequest {
     pub source_root: Option<String>,
 }
 
+/// Request body for `POST /api/fs/kaneo-workspace` — ensure the Kaneo
+/// per-project per-role workspace directory exists under the backend's
+/// managed `kaneo-workspaces` root and return its absolute path.
+#[derive(Debug, Deserialize)]
+pub struct KaneoWorkspaceRequest {
+    /// Kaneo project slug (directory segment; validated as a path component).
+    pub project_slug: String,
+    /// Kaneo agent role (directory segment; validated as a path component).
+    pub role: String,
+}
+
 /// Request body for `POST /api/fs/reveal` — reveal a pe-addressed file/dir in
 /// the OS file manager ("open enclosing folder"). The backend resolves the
 /// identity to an absolute path via `resolve_reference`, then hands it to the
