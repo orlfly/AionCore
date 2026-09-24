@@ -15,9 +15,9 @@ use aionui_db::{
     Database, IAcpSessionRepository, IAgentMetadataRepository, IConversationRepository, IMcpServerRepository,
     IProjectStore, ISkillRepository, IUserOrderStore, IUserRepository, SqliteAcpSessionRepository,
     SqliteAgentMetadataRepository, SqliteAssistantDefinitionRepository, SqliteAssistantOverlayRepository,
-    SqliteAssistantPreferenceRepository, SqliteConversationRepository, SqliteMcpServerRepository, SqliteProjectStore,
-    SqliteProviderRepository, SqliteSettingsRepository, SqliteSkillRepository, SqliteUserOrderStore,
-    SqliteUserRepository,
+    SqliteAssistantPreferenceRepository, SqliteClientPreferenceRepository, SqliteConversationRepository,
+    SqliteMcpServerRepository, SqliteProjectStore, SqliteProviderRepository, SqliteSettingsRepository,
+    SqliteSkillRepository, SqliteUserOrderStore, SqliteUserRepository,
 };
 use aionui_project::ProjectService;
 use aionui_realtime::{BroadcastEventBus, WebSocketManager};
@@ -369,6 +369,12 @@ impl AppServices {
             broadcaster: event_bus.clone(),
             backend_binary_path: backend_binary_path.clone(),
             mcp_server_repo: Some(mcp_server_repo),
+            // Kaneo credential store — resolves `kaneo:<contextId>` env-refs in
+            // inline session MCP snapshots into decrypted env at agent-build time.
+            kaneo_credential_service: Some(Arc::new(aionui_system::KaneoCredentialService::new(
+                Arc::new(SqliteClientPreferenceRepository::new(database.pool().clone())),
+                encryption_key,
+            ))),
             session_spawner,
             // agy cannot prompt for tool permission in headless mode, so AionUi
             // registers itself as its PreToolUse hook; the hook process calls

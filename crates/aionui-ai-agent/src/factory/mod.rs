@@ -41,6 +41,11 @@ pub struct AgentFactoryDeps {
     /// inject enabled servers into `session/new` (ELECTRON-1JG fix).
     /// `None` for tests/composition paths that do not need MCP injection.
     pub mcp_server_repo: Option<Arc<dyn IMcpServerRepository>>,
+    /// Kaneo credential store (project-scoped env feature). Resolves
+    /// `kaneo:<contextId>` env-refs in inline session MCP snapshots into
+    /// decrypted `KANEO_API_URL`/`KANEO_API_KEY` values at agent-build time.
+    /// `None` on test/composition paths that never need Kaneo injection.
+    pub kaneo_credential_service: Option<Arc<aionui_system::KaneoCredentialService>>,
     /// Subprocess spawner for the clean-slate session model. claude/codex always
     /// run through `SessionAgentTask` (direct-CLI) instead of the ACP manager, so
     /// the spawner is unconditionally wired — there is no fallback to the ACP path.

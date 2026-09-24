@@ -13,11 +13,12 @@ pub(crate) mod dev_prompt_dump;
 pub mod error;
 pub mod factory;
 pub(crate) mod idle_scanner;
-pub mod manager;
 /// Neutral MCP resolution for the session-model port (claude/codex). Ported from
 /// clean-slate `aionui-agent-context::mcp_resolve` — the SSOT that turns a
 /// conversation's configured MCP servers into the SDK-free `SessionMcpServer`
 /// shape the `SessionBackend` stack carries in `SessionConfig.init.mcp_servers`.
+pub mod kaneo_envref;
+pub mod manager;
 pub mod mcp_resolve;
 pub mod media;
 pub(crate) mod persistence;

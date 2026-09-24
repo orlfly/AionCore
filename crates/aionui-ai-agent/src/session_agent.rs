@@ -1529,6 +1529,11 @@ pub struct SessionBuildInputs<'a> {
     /// Broadcaster forwarded to the MCP resolver for runtime-resolution reporting
     /// parity with the legacy ACP path.
     pub broadcaster: Arc<dyn EventBroadcaster>,
+    /// Kaneo credential store. Inline snapshot MCP servers carrying
+    /// `kaneo:<contextId>` env-refs are resolved against it (decrypted
+    /// `KANEO_API_URL`/`KANEO_API_KEY` injection) before spec conversion.
+    /// `None` (tests) = refs fail closed and the server is dropped.
+    pub kaneo_credential_service: Option<Arc<aionui_system::KaneoCredentialService>>,
     /// The resolved catalog row id + the registry's catalog sender, used to write
     /// the backend's discovered modes/models/commands back into `agent_metadata`
     /// (GAP #7 / G5) so the `/api/agents` picker stays fresh. `None` on paths that
@@ -1744,6 +1749,7 @@ pub async fn build_antigravity_instance(
         mcp_server_repo,
         runtime_env,
         broadcaster,
+        kaneo_credential_service,
         catalog_writeback,
         acp_session_repo,
         // agy has no prompt-dump lane yet (the dev dump is keyed by a
@@ -1771,6 +1777,14 @@ pub async fn build_antigravity_instance(
         None => Vec::new(),
     };
     neutral.extend(config.session_mcp_servers.iter().cloned());
+    // Kaneo project-scoped env (G6): decrypt `kaneo:<contextId>` env-refs in the
+    // inline snapshot BEFORE spec conversion, so plaintext never reaches the
+    // renderer-visible config — only the spawned MCP subprocess env.
+    if let Some(kaneo_service) = kaneo_credential_service.as_ref() {
+        neutral = crate::kaneo_envref::resolve_snapshot_env_refs(&neutral, &user_id, kaneo_service).await;
+    } else {
+        neutral.retain(|server| !crate::kaneo_envref::server_has_env_refs(server));
+    }
     let mut mcp_servers: Vec<McpServerSpec> = neutral.iter().map(session_server_to_spec).collect();
     if let Some(cfg) = config.team_mcp_stdio_config.as_ref() {
         let mut coordination = vec![team_mcp_server_spec(cfg)];
@@ -1872,6 +1886,7 @@ pub async fn build_session_instance(
         mcp_server_repo,
         runtime_env,
         broadcaster,
+        kaneo_credential_service,
         catalog_writeback,
         acp_session_repo,
         prompt_dump_dir,
@@ -1910,6 +1925,13 @@ pub async fn build_session_instance(
             .filter(|server| server.name != TEAM_MCP_SERVER_NAME)
             .cloned(),
     );
+    // Kaneo project-scoped env (G6): decrypt `kaneo:<contextId>` env-refs in the
+    // inline snapshot BEFORE spec conversion — same contract as the agy path.
+    if let Some(kaneo_service) = kaneo_credential_service.as_ref() {
+        neutral = crate::kaneo_envref::resolve_snapshot_env_refs(&neutral, &user_id, kaneo_service).await;
+    } else {
+        neutral.retain(|server| !crate::kaneo_envref::server_has_env_refs(server));
+    }
     let mut mcp_servers: Vec<McpServerSpec> = neutral.iter().map(session_server_to_spec).collect();
     if let Some(cfg) = config.team_mcp_stdio_config.as_ref() {
         // Team-MCP is PREPENDED before the user's servers (clean-slate + legacy
@@ -5020,6 +5042,7 @@ mod build_mapping_tests {
                 mcp_server_repo: Some(&repo),
                 runtime_env: &[],
                 broadcaster,
+                kaneo_credential_service: None,
                 catalog_writeback: None,
                 acp_session_repo: None,
                 prompt_dump_dir: None,
