@@ -488,6 +488,10 @@ pub fn build_system_state(services: &AppServices) -> SystemRouterState {
     } else {
         ClientPrefService::with_keep_awake_controller_without_restore(client_pref_repo, keep_awake_controller)
     };
+    let kaneo_credential_service = aionui_system::KaneoCredentialService::new(
+        Arc::new(SqliteClientPreferenceRepository::new(pool.clone())),
+        encryption_key,
+    );
 
     SystemRouterState {
         settings_service: SettingsService::new(Arc::new(SqliteSettingsRepository::new(pool.clone()))),
@@ -500,6 +504,7 @@ pub fn build_system_state(services: &AppServices) -> SystemRouterState {
         feedback_diagnostics_service: FeedbackDiagnosticsService::new(Arc::new(
             SqliteFeedbackDiagnosticsRepository::new(pool),
         )),
+        kaneo_credential_service,
     }
 }
 

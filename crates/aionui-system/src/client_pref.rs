@@ -246,6 +246,11 @@ fn validate_key(key: &str) -> Result<(), SystemError> {
             "Preference key exceeds maximum length of {MAX_KEY_LENGTH} characters"
         )));
     }
+    if crate::kaneo_credential::is_reserved_credential_key(key) {
+        return Err(SystemError::BadRequest(
+            "Preference key uses a reserved namespace (kaneo-credential:*)".into(),
+        ));
+    }
     Ok(())
 }
 

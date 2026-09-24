@@ -20,6 +20,7 @@ mod cron;
 mod custom_agent;
 mod extension;
 mod file;
+mod kaneo;
 mod lifecycle;
 mod mcp;
 mod office;
@@ -133,6 +134,7 @@ pub use file::{
     SnapshotStageRequest, SnapshotWorkspaceRequest, StreamQuery, WorkspaceFlatFileResponse, WriteContentRequest,
     WriteFileRequest,
 };
+pub use kaneo::{KaneoCredentialListResponse, KaneoCredentialMetaResponse, UpsertKaneoCredentialRequest};
 pub use lifecycle::{GitHubReleaseAsset, SystemInfoResponse, UpdateCheckRequest, UpdateCheckResult, UpdateReleaseInfo};
 pub use mcp::{
     BatchImportMcpServersRequest, CreateMcpServerRequest, DetectedMcpServerEntry, DetectedMcpServerResponse,

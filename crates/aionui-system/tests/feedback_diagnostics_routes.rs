@@ -33,6 +33,10 @@ fn build_state(db: &aionui_db::Database) -> SystemRouterState {
         feedback_diagnostics_service: FeedbackDiagnosticsService::new(Arc::new(
             SqliteFeedbackDiagnosticsRepository::new(db.pool().clone()),
         )),
+        kaneo_credential_service: aionui_system::KaneoCredentialService::new(
+            Arc::new(SqliteClientPreferenceRepository::new(db.pool().clone())),
+            TEST_ENCRYPTION_KEY,
+        ),
     }
 }
 

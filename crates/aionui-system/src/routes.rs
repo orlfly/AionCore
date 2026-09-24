@@ -9,9 +9,10 @@ use axum::routing::{delete, get, post};
 use aionui_api_types::{
     ApiResponse, ClientPreferencesResponse, CreateProviderRequest, CurrentUserResponse, DetectProtocolRequest,
     EnsureNodeRuntimeRequest, EnsureNodeRuntimeResponse, FeedbackDiagnosticsQuery, FeedbackDiagnosticsResponse,
-    FetchModelsAnonymousRequest, FetchModelsRequest, FetchModelsResponse, ProtocolDetectionResponse, ProviderResponse,
-    SystemInfoResponse, SystemSettingsResponse, UpdateCheckRequest, UpdateCheckResult, UpdateClientPreferencesRequest,
-    UpdateProviderRequest, UpdateSettingsRequest,
+    FetchModelsAnonymousRequest, FetchModelsRequest, FetchModelsResponse, KaneoCredentialListResponse,
+    KaneoCredentialMetaResponse, ProtocolDetectionResponse, ProviderResponse, SystemInfoResponse,
+    SystemSettingsResponse, UpdateCheckRequest, UpdateCheckResult, UpdateClientPreferencesRequest,
+    UpdateProviderRequest, UpdateSettingsRequest, UpsertKaneoCredentialRequest,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::ApiError;
@@ -19,6 +20,7 @@ use aionui_common::ApiError;
 use crate::client_pref::ClientPrefService;
 use crate::diagnostics::FeedbackDiagnosticsService;
 use crate::error::SystemError;
+use crate::kaneo_credential::KaneoCredentialService;
 use crate::model_fetcher::ModelFetchService;
 use crate::protocol::ProtocolDetectionService;
 use crate::provider::ProviderService;
@@ -37,6 +39,7 @@ pub struct SystemRouterState {
     pub version_check_service: VersionCheckService,
     pub runtime_prepare_service: RuntimePrepareService,
     pub feedback_diagnostics_service: FeedbackDiagnosticsService,
+    pub kaneo_credential_service: KaneoCredentialService,
 }
 
 impl From<SystemError> for ApiError {
@@ -74,12 +77,21 @@ impl From<SystemError> for ApiError {
 /// - `POST /api/system/check-update`         — check GitHub for new versions
 /// - `POST /api/system/ensure-node-runtime`  — prepare managed Node runtime
 /// - `GET  /api/system/diagnostics/feedback-report` — collect sanitized feedback diagnostics
+/// - `GET  /api/kaneo-credentials`           — list stored credential metadata (no key material)
+/// - `GET  /api/kaneo-credentials/:id`       — one credential's metadata (no key material)
+/// - `PUT  /api/kaneo-credentials/:id`       — store/rotate the encrypted key
+/// - `DELETE /api/kaneo-credentials/:id`     — remove the stored key
 pub fn system_routes(state: SystemRouterState) -> Router {
     Router::new()
         .route("/api/settings", get(get_settings).patch(update_settings))
+        .route("/api/settings/client", get(get_client_preferences).put(update_client_preferences))
         .route(
-            "/api/settings/client",
-            get(get_client_preferences).put(update_client_preferences),
+            "/api/kaneo-credentials",
+            get(list_kaneo_credentials),
+        )
+        .route(
+            "/api/kaneo-credentials/{context_id}",
+            get(get_kaneo_credential).put(put_kaneo_credential).delete(delete_kaneo_credential),
         )
         .route("/api/providers", get(list_providers).post(create_provider))
         // Literal-segment routes must register BEFORE the `/{id}` routes so
@@ -188,6 +200,67 @@ async fn update_client_preferences(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(ApiResponse::success()))
+}
+
+// ===========================================================================
+// Kaneo credential handlers — metadata only; no endpoint ever returns the
+// stored plaintext API key (decryption is server-side, `resolve`).
+// ===========================================================================
+
+async fn list_kaneo_credentials(
+    State(state): State<SystemRouterState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<Json<ApiResponse<KaneoCredentialListResponse>>, ApiError> {
+    let credentials = state
+        .kaneo_credential_service
+        .list(&user.id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::ok(credentials)))
+}
+
+async fn get_kaneo_credential(
+    State(state): State<SystemRouterState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(context_id): Path<String>,
+) -> Result<Json<ApiResponse<KaneoCredentialMetaResponse>>, ApiError> {
+    let credential = state
+        .kaneo_credential_service
+        .get(&user.id, &context_id)
+        .await
+        .map_err(ApiError::from)?;
+    match credential {
+        Some(meta) => Ok(Json(ApiResponse::ok(meta))),
+        None => Err(ApiError::NotFound(format!("no kaneo credential for context {context_id}"))),
+    }
+}
+
+async fn put_kaneo_credential(
+    State(state): State<SystemRouterState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(context_id): Path<String>,
+    body: Result<Json<UpsertKaneoCredentialRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<KaneoCredentialMetaResponse>>, ApiError> {
+    let Json(req) = body.map_err(ApiError::from)?;
+    let meta = state
+        .kaneo_credential_service
+        .upsert(&user.id, &context_id, req)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::ok(meta)))
+}
+
+async fn delete_kaneo_credential(
+    State(state): State<SystemRouterState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(context_id): Path<String>,
+) -> Result<Json<ApiResponse<bool>>, ApiError> {
+    let deleted = state
+        .kaneo_credential_service
+        .delete(&user.id, &context_id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::ok(deleted)))
 }
 
 // ===========================================================================
