@@ -257,7 +257,9 @@ async fn ensure_kaneo_workspace(
 }
 
 /// Validate a directory segment: a single, non-hidden, non-empty path
-/// component with no separators or traversal characters.
+/// component with no separators or traversal characters. ASCII slugs pass
+/// through unchanged; other (e.g. Unicode) slugs are folded to a
+/// deterministic, filesystem-safe form by `kaneo_segment_dir_name`.
 fn validate_kaneo_segment(value: &str, field: &'static str) -> Result<(), ApiError> {
     let invalid = || ApiError::BadRequest(format!("invalid kaneo workspace {field}"));
     if value.is_empty()
@@ -266,13 +268,73 @@ fn validate_kaneo_segment(value: &str, field: &'static str) -> Result<(), ApiErr
         || value.contains('/')
         || value.contains('\\')
         || value.contains("..")
-        || !value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        || value.chars().any(char::is_control)
     {
         return Err(invalid());
     }
     Ok(())
+}
+
+/// Map a validated kaneo segment to its on-disk directory name.
+///
+/// Kaneo project slugs are free-form text (the web UI generates them from the
+/// project name with Unicode property escapes, so a project named in Han,
+/// Cyrillic, etc. gets a non-ASCII slug). Directories must stay
+/// filesystem-portable, so:
+///
+/// - an ASCII slug made of `[A-Za-z0-9_-]` not starting with `-` or `_` is
+///   used verbatim (backwards compatible with every workspace created by
+///   earlier builds);
+/// - anything else is folded deterministically: each character becomes a
+///   literal if it is ASCII alphanumeric, `_`, or `-`, otherwise a `u<hex>`
+///   escape, joined with `-`, then truncated to fit a 96-byte cap with a
+///   hash suffix. The mapping is injective enough in practice (distinct
+///   escaped forms never collide) and never produces separators, hidden
+///   names, or traversal fragments.
+fn kaneo_segment_dir_name(value: &str) -> String {
+    const MAX_BYTES: usize = 96;
+    let is_plain = |s: &str| {
+        !s.is_empty()
+            && s.len() <= MAX_BYTES
+            && !s.starts_with(['-', '_'])
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    if is_plain(value) {
+        return value.to_owned();
+    }
+
+    // Fold: printable ASCII alphanumerics and `-`/`_` stay literal; every
+    // other code point becomes `u<hex>`. A `-` separates escapes from
+    // literals and from each other so boundaries stay unambiguous.
+    let mut folded = String::new();
+    let mut prev_was_escape = false;
+    for c in value.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            folded.push(c);
+            prev_was_escape = false;
+        } else {
+            if prev_was_escape {
+                folded.push('-');
+            }
+            folded.push_str(&format!("u{:x}", c as u32));
+            prev_was_escape = true;
+        }
+    }
+
+    // Deterministic short hash disambiguates folds whose escaped form got
+    // truncated and keeps long Unicode slugs within the byte cap.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in value.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    let suffix = format!("-h{hash:016x}");
+    let budget = MAX_BYTES.saturating_sub(suffix.len());
+    let mut cut = folded.clone();
+    while cut.len() > budget {
+        cut.pop();
+    }
+    format!("{cut}{suffix}")
 }
 
 /// Resolve the kaneo workspace directory for `(project_slug, role)` without
@@ -284,18 +346,27 @@ fn kaneo_workspace_root(
     role: &str,
 ) -> Result<PathBuf, ApiError> {
     validate_kaneo_segment(project_slug, "project slug")?;
-    let role = role.to_string();
-    validate_kaneo_segment(&role, "role")?;
+    validate_kaneo_segment(role, "role")?;
+    let slug_dir = kaneo_segment_dir_name(project_slug);
+    let role_dir = kaneo_segment_dir_name(role);
 
     // Prefer a root whose name looks like the data dir (ends with `.aionui`),
     // else the home root, else the first root. Canonicalize when possible.
     let root = allowed_roots
         .iter()
-        .find(|r| r.file_name().map(|n| n.to_string_lossy().ends_with(".aionui")).unwrap_or(false))
-        .or_else(|| allowed_roots.iter().find(|r| r.starts_with(dirs::home_dir().unwrap_or_default())))
+        .find(|r| {
+            r.file_name()
+                .map(|n| n.to_string_lossy().ends_with(".aionui"))
+                .unwrap_or(false)
+        })
+        .or_else(|| {
+            allowed_roots
+                .iter()
+                .find(|r| r.starts_with(dirs::home_dir().unwrap_or_default()))
+        })
         .or_else(|| allowed_roots.first())
         .ok_or_else(|| ApiError::BadRequest("no allowed root for kaneo workspaces".to_owned()))?;
-    Ok(root.join("kaneo-workspaces").join(project_slug).join(&role))
+    Ok(root.join("kaneo-workspaces").join(slug_dir).join(role_dir))
 }
 
 async fn copy_files(
@@ -1412,5 +1483,78 @@ mod tests {
     #[test]
     fn sanitize_upload_filename_plain_passthrough() {
         assert_eq!(sanitize_upload_filename("image.png").as_deref(), Some("image.png"));
+    }
+
+    // ---- kaneo segment validation + dir-name folding -----------------------
+
+    #[test]
+    fn validate_kaneo_segment_accepts_ascii_and_unicode_words() {
+        assert!(validate_kaneo_segment("aionui", "project slug").is_ok());
+        assert!(validate_kaneo_segment("A-1_b", "project slug").is_ok());
+        // Kaneo web UI generates slugs from arbitrary-language project names.
+        assert!(validate_kaneo_segment("我的项", "project slug").is_ok());
+        assert!(validate_kaneo_segment("Ærø", "project slug").is_ok());
+    }
+
+    #[test]
+    fn validate_kaneo_segment_rejects_traversal_and_controls() {
+        assert!(validate_kaneo_segment("", "project slug").is_err());
+        assert!(validate_kaneo_segment(".hidden", "project slug").is_err());
+        assert!(validate_kaneo_segment("a/b", "project slug").is_err());
+        assert!(validate_kaneo_segment("a\\b", "project slug").is_err());
+        assert!(validate_kaneo_segment("a..b", "project slug").is_err());
+        assert!(validate_kaneo_segment("a\nb", "project slug").is_err());
+        assert!(validate_kaneo_segment(&"x".repeat(97), "project slug").is_err());
+    }
+
+    #[test]
+    fn kaneo_segment_dir_name_ascii_passthrough() {
+        assert_eq!(kaneo_segment_dir_name("aionui"), "aionui");
+        assert_eq!(kaneo_segment_dir_name("A-1_b"), "A-1_b");
+    }
+
+    #[test]
+    fn kaneo_segment_dir_name_unicode_is_deterministic_and_safe() {
+        let first = kaneo_segment_dir_name("我的项");
+        let second = kaneo_segment_dir_name("我的项");
+        assert_eq!(first, second);
+        assert_eq!(first, kaneo_segment_dir_name("\u{6211}\u{7684}\u{9879}"));
+        // Safe on-disk form: ASCII only, no separators beyond '-', not hidden,
+        // within the byte cap, and distinct from any other slug's fold.
+        assert!(first.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(!first.starts_with('.'));
+        assert!(first.len() <= 96);
+        assert!(!first.contains(".."));
+        assert_ne!(first, kaneo_segment_dir_name("别的项"));
+        assert_ne!(first, kaneo_segment_dir_name("aionui"));
+    }
+
+    #[test]
+    fn kaneo_segment_dir_name_fold_is_injective_for_escaped_forms() {
+        // Distinct escaped characters never fold to the same directory name:
+        // each escape carries its own code point and a separator keeps
+        // escape/literal boundaries unambiguous.
+        assert_ne!(
+            kaneo_segment_dir_name("\u{4e2d}"),
+            kaneo_segment_dir_name("\u{4e2d}\u{6587}")
+        );
+        assert_ne!(
+            kaneo_segment_dir_name("\u{4e2d}a"),
+            kaneo_segment_dir_name("\u{4e2d}-a")
+        );
+        // Trailing literal '-' after an escape is preserved by the separator.
+        assert_eq!(kaneo_segment_dir_name("\u{4e2d}-"), kaneo_segment_dir_name("\u{4e2d}-"));
+        assert_ne!(kaneo_segment_dir_name("\u{4e2d}"), kaneo_segment_dir_name("\u{4e2d}-"));
+    }
+
+    #[test]
+    fn kaneo_segment_dir_name_long_slug_stays_in_cap() {
+        let long_unicode = "中".repeat(60);
+        let dir = kaneo_segment_dir_name(&long_unicode);
+        assert!(dir.len() <= 96);
+        assert!(dir.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        // Same input folds identically; different long inputs differ.
+        assert_eq!(dir, kaneo_segment_dir_name(&long_unicode));
+        assert_ne!(dir, kaneo_segment_dir_name(&"日".repeat(60)));
     }
 }
