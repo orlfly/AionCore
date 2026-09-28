@@ -790,16 +790,12 @@ async fn merge_session_snapshot_mcp_servers(
     // lanes. Fail-closed: unresolved refs drop the server (warn-logged inside),
     // never leak a sentinel into the spawned MCP env.
     let resolved_servers = match kaneo_service {
-        Some(service) => {
-            crate::kaneo_envref::resolve_snapshot_env_refs(session_mcp_servers, user_id, service).await
-        }
-        None => {
-            session_mcp_servers
-                .iter()
-                .filter(|server| !crate::kaneo_envref::server_has_env_refs(server))
-                .cloned()
-                .collect::<Vec<_>>()
-        }
+        Some(service) => crate::kaneo_envref::resolve_snapshot_env_refs(session_mcp_servers, user_id, service).await,
+        None => session_mcp_servers
+            .iter()
+            .filter(|server| !crate::kaneo_envref::server_has_env_refs(server))
+            .cloned()
+            .collect::<Vec<_>>(),
     };
     for server in &resolved_servers {
         // Reserved name defense: the team coordination MCP must win. The inline

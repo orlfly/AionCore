@@ -22,9 +22,8 @@ use aionui_db::{
     SqliteSettingsRepository, UserStatus, UserType, init_database_memory,
 };
 use aionui_system::{
-    ClientPrefService, FeedbackDiagnosticsService, KaneoCredentialService, ModelFetchService,
-    ProtocolDetectionService, ProviderService, RuntimePrepareService, SettingsService, SystemRouterState,
-    VersionCheckService, system_routes,
+    ClientPrefService, FeedbackDiagnosticsService, KaneoCredentialService, ModelFetchService, ProtocolDetectionService,
+    ProviderService, RuntimePrepareService, SettingsService, SystemRouterState, VersionCheckService, system_routes,
 };
 
 const TEST_ENCRYPTION_KEY: [u8; 32] = [0x42; 32];
@@ -37,9 +36,7 @@ fn build_state(db: &aionui_db::Database) -> SystemRouterState {
     let http_client = reqwest::Client::new();
     SystemRouterState {
         settings_service: SettingsService::new(Arc::new(SqliteSettingsRepository::new(db.pool().clone()))),
-        client_pref_service: ClientPrefService::new(Arc::new(SqliteClientPreferenceRepository::new(
-            db.pool().clone(),
-        ))),
+        client_pref_service: ClientPrefService::new(Arc::new(SqliteClientPreferenceRepository::new(db.pool().clone()))),
         provider_service: ProviderService::new(provider_repo.clone(), TEST_ENCRYPTION_KEY),
         model_fetch_service: ModelFetchService::new(provider_repo, TEST_ENCRYPTION_KEY, http_client.clone()),
         protocol_detection_service: ProtocolDetectionService::new(http_client.clone()),
@@ -121,13 +118,22 @@ async fn put_then_get_returns_metadata_without_key() {
     let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(parsed["success"], true, "raw body: {}", String::from_utf8_lossy(&bytes));
     let meta = &parsed["data"];
-    assert_eq!(meta["context_id"], CONTEXT_ID, "raw body: {}", String::from_utf8_lossy(&bytes));
+    assert_eq!(
+        meta["context_id"],
+        CONTEXT_ID,
+        "raw body: {}",
+        String::from_utf8_lossy(&bytes)
+    );
     assert_eq!(meta["base_url"], "http://localhost:1337");
     assert_eq!(meta["agent_role"], "coding");
     assert_eq!(meta["project_id"], "proj-1");
     assert_eq!(meta["key_expires_at"], "2026-10-01T00:00:00.000Z");
     // Neither the metadata nor the body may carry key material.
-    assert!(!bytes.windows(PLAINTEXT_KEY.len()).any(|w| w == PLAINTEXT_KEY.as_bytes()));
+    assert!(
+        !bytes
+            .windows(PLAINTEXT_KEY.len())
+            .any(|w| w == PLAINTEXT_KEY.as_bytes())
+    );
 
     let response = app
         .oneshot(request_for_user(
@@ -143,7 +149,9 @@ async fn put_then_get_returns_metadata_without_key() {
     let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(parsed["data"]["context_id"], CONTEXT_ID);
     assert!(
-        !bytes.windows(PLAINTEXT_KEY.len()).any(|w| w == PLAINTEXT_KEY.as_bytes()),
+        !bytes
+            .windows(PLAINTEXT_KEY.len())
+            .any(|w| w == PLAINTEXT_KEY.as_bytes()),
         "GET must not echo key material: {}",
         String::from_utf8_lossy(&bytes)
     );
@@ -153,7 +161,12 @@ async fn put_then_get_returns_metadata_without_key() {
 async fn get_unknown_context_is_404() {
     let app = setup().await;
     let response = app
-        .oneshot(request_for_user(TEST_USER_ID, "GET", "/api/kaneo-credentials/kctx-none", None))
+        .oneshot(request_for_user(
+            TEST_USER_ID,
+            "GET",
+            "/api/kaneo-credentials/kctx-none",
+            None,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -197,7 +210,11 @@ async fn list_only_returns_kaneo_credential_rows() {
     let list = parsed["data"].as_array().unwrap();
     assert_eq!(list.len(), 1, "foreign preference rows must be filtered out");
     assert_eq!(list[0]["context_id"], CONTEXT_ID);
-    assert!(!bytes.windows(PLAINTEXT_KEY.len()).any(|w| w == PLAINTEXT_KEY.as_bytes()));
+    assert!(
+        !bytes
+            .windows(PLAINTEXT_KEY.len())
+            .any(|w| w == PLAINTEXT_KEY.as_bytes())
+    );
 }
 
 #[tokio::test]

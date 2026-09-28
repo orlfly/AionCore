@@ -84,14 +84,16 @@ impl From<SystemError> for ApiError {
 pub fn system_routes(state: SystemRouterState) -> Router {
     Router::new()
         .route("/api/settings", get(get_settings).patch(update_settings))
-        .route("/api/settings/client", get(get_client_preferences).put(update_client_preferences))
         .route(
-            "/api/kaneo-credentials",
-            get(list_kaneo_credentials),
+            "/api/settings/client",
+            get(get_client_preferences).put(update_client_preferences),
         )
+        .route("/api/kaneo-credentials", get(list_kaneo_credentials))
         .route(
             "/api/kaneo-credentials/{context_id}",
-            get(get_kaneo_credential).put(put_kaneo_credential).delete(delete_kaneo_credential),
+            get(get_kaneo_credential)
+                .put(put_kaneo_credential)
+                .delete(delete_kaneo_credential),
         )
         .route("/api/providers", get(list_providers).post(create_provider))
         // Literal-segment routes must register BEFORE the `/{id}` routes so
@@ -231,7 +233,9 @@ async fn get_kaneo_credential(
         .map_err(ApiError::from)?;
     match credential {
         Some(meta) => Ok(Json(ApiResponse::ok(meta))),
-        None => Err(ApiError::NotFound(format!("no kaneo credential for context {context_id}"))),
+        None => Err(ApiError::NotFound(format!(
+            "no kaneo credential for context {context_id}"
+        ))),
     }
 }
 

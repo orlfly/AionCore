@@ -426,10 +426,7 @@ mod tests {
         env2.insert("KANEO_API_URL".to_string(), "kaneo:kctx-1".to_string());
         let kaneo2 = stdio_server(env2);
         append_runtime_kaneo_env(&mut runtime_env, &[kaneo2], "user-1", &service).await;
-        assert_eq!(
-            runtime_env.iter().filter(|(k, _)| k == "KANEO_API_URL").count(),
-            1
-        );
+        assert_eq!(runtime_env.iter().filter(|(k, _)| k == "KANEO_API_URL").count(), 1);
     }
 
     #[tokio::test]

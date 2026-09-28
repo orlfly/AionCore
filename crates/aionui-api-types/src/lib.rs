@@ -127,12 +127,11 @@ pub use extension::{
 };
 pub use file::{
     ContentEncoding, ContentMetadataRequest, CopyFailure, CopyFilesRequest, CopyFilesResponse, CopyTarget,
-    DirOrFileResponse, FetchRemoteImageRequest, FileChangeInfoResponse, FileMetadataResponse,
-    GetFileMetadataRequest, GetFilesByDirRequest, GetImageBase64Request, KaneoWorkspaceRequest,
-    ListWorkspaceFilesRequest, OpenSystemFileRequest, ReadContentRequest, ReadFileRequest, RevealItemRequest,
-    SnapshotBaselineRequest, SnapshotCompareResponse, SnapshotDiscardRequest, SnapshotInfoResponse, SnapshotMode,
-    SnapshotStageRequest, SnapshotWorkspaceRequest, StreamQuery, WorkspaceFlatFileResponse, WriteContentRequest,
-    WriteFileRequest,
+    DirOrFileResponse, FetchRemoteImageRequest, FileChangeInfoResponse, FileMetadataResponse, GetFileMetadataRequest,
+    GetFilesByDirRequest, GetImageBase64Request, KaneoWorkspaceRequest, ListWorkspaceFilesRequest,
+    OpenSystemFileRequest, ReadContentRequest, ReadFileRequest, RevealItemRequest, SnapshotBaselineRequest,
+    SnapshotCompareResponse, SnapshotDiscardRequest, SnapshotInfoResponse, SnapshotMode, SnapshotStageRequest,
+    SnapshotWorkspaceRequest, StreamQuery, WorkspaceFlatFileResponse, WriteContentRequest, WriteFileRequest,
 };
 pub use kaneo::{KaneoCredentialListResponse, KaneoCredentialMetaResponse, UpsertKaneoCredentialRequest};
 pub use lifecycle::{GitHubReleaseAsset, SystemInfoResponse, UpdateCheckRequest, UpdateCheckResult, UpdateReleaseInfo};

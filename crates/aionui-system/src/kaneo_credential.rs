@@ -170,10 +170,8 @@ impl KaneoCredentialService {
             return Ok(None);
         };
         let payload = parse_payload(&value)?;
-        let api_key =
-            decrypt_string(&payload.ciphertext, &self.encryption_key).map_err(|e| {
-                SystemError::Internal(format!("kaneo credential decryption failed: {e}"))
-            })?;
+        let api_key = decrypt_string(&payload.ciphertext, &self.encryption_key)
+            .map_err(|e| SystemError::Internal(format!("kaneo credential decryption failed: {e}")))?;
         Ok(Some(ResolvedKaneoCredential {
             base_url: payload.base_url,
             agent_role: payload.agent_role,
@@ -183,19 +181,13 @@ impl KaneoCredentialService {
         }))
     }
 
-    async fn load_row(
-        &self,
-        user_id: &str,
-        context_id: &str,
-    ) -> Result<Option<(String, String)>, SystemError> {
+    async fn load_row(&self, user_id: &str, context_id: &str) -> Result<Option<(String, String)>, SystemError> {
         let rows = self
             .repo
             .get_by_keys(user_id, &[preference_key(context_id).as_str()])
             .await
             .map_err(|e| SystemError::Internal(format!("failed to load kaneo credential: {e}")))?;
-        Ok(rows
-            .first()
-            .map(|row| (row.key.clone(), row.value.clone())))
+        Ok(rows.first().map(|row| (row.key.clone(), row.value.clone())))
     }
 
     fn meta_response(&self, context_id: &str, payload: StoredKaneoCredential) -> KaneoCredentialMetaResponse {
@@ -297,7 +289,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl IClientPreferenceRepository for MockPrefRepo {
-        async fn get_all(&self, _user_id: &str) -> Result<Vec<aionui_db::models::ClientPreference>, aionui_db::DbError> {
+        async fn get_all(
+            &self,
+            _user_id: &str,
+        ) -> Result<Vec<aionui_db::models::ClientPreference>, aionui_db::DbError> {
             let rows = self.rows.lock().unwrap();
             Ok(rows.iter().map(|(k, v)| row(k, v)).collect())
         }
@@ -352,10 +347,7 @@ mod tests {
     async fn upsert_then_get_returns_metadata_without_key() {
         let repo = Arc::new(MockPrefRepo::new());
         let service = KaneoCredentialService::new(repo.clone(), test_key());
-        let meta = service
-            .upsert("user-1", "kctx-abc", sample_request())
-            .await
-            .unwrap();
+        let meta = service.upsert("user-1", "kctx-abc", sample_request()).await.unwrap();
         assert_eq!(meta.context_id, "kctx-abc");
         assert_eq!(meta.base_url, "http://localhost:1337");
         assert_eq!(meta.agent_role, "coding");
