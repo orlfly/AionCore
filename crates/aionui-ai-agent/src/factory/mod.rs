@@ -186,7 +186,31 @@ pub(crate) async fn compose_injected_prefix_for(
 }
 
 async fn build_agent(deps: Arc<AgentFactoryDeps>, options: BuildTaskOptions) -> Result<AgentInstance, AgentError> {
-    let context = options.context;
+    let mut context = options.context;
+
+    // Kaneo project-scoped env (G6): the inline session snapshot may carry the
+    // builtin kaneo MCP server with `kaneo:<contextId>` sentinels. Beyond the
+    // per-lane MCP env resolution below, ALSO project the decrypted
+    // `KANEO_API_URL`/`KANEO_API_KEY` into the conversation runtime env so the
+    // agent process (its shell + ExecCommand) sees them — the `kaneo-*` skills
+    // call the API via curl, not only via MCP tools. Applied here (the shared
+    // dispatch point) so every lane benefits; per-lane snapshot resolution
+    // (session_agent / aionrs) still handles the MCP server env itself.
+    if let Some(kaneo_service) = deps.kaneo_credential_service.as_ref() {
+        let snapshot_servers = match context.kind {
+            AgentSessionKind::Acp(ref acp) => acp.config.session_mcp_servers.as_slice(),
+            AgentSessionKind::Aionrs(ref aionrs) => aionrs.config.session_mcp_servers.as_slice(),
+            AgentSessionKind::Antigravity(ref agy) => agy.config.session_mcp_servers.as_slice(),
+        };
+        crate::kaneo_envref::append_runtime_kaneo_env(
+            &mut context.runtime_env,
+            snapshot_servers,
+            &context.conversation.user_id,
+            kaneo_service,
+        )
+        .await;
+    }
+
     let ctx = FactoryContext::resolve(&context).await?;
     let model = context.model.clone();
     match context.kind {

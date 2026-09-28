@@ -111,6 +111,7 @@ pub(super) async fn build(
         &ctx.user_id,
         &ctx.conversation_id,
         deps.broadcaster.clone(),
+        deps.kaneo_credential_service.as_ref(),
     )
     .await;
 
@@ -782,8 +783,25 @@ async fn merge_session_snapshot_mcp_servers(
     user_id: &str,
     conversation_id: &str,
     broadcaster: Arc<dyn EventBroadcaster>,
+    kaneo_service: Option<&Arc<aionui_system::KaneoCredentialService>>,
 ) {
-    for server in session_mcp_servers {
+    // Kaneo project-scoped env (G6): resolve `kaneo:<contextId>` sentinels in
+    // the inline snapshot BEFORE conversion, mirroring the claude/codex/agy
+    // lanes. Fail-closed: unresolved refs drop the server (warn-logged inside),
+    // never leak a sentinel into the spawned MCP env.
+    let resolved_servers = match kaneo_service {
+        Some(service) => {
+            crate::kaneo_envref::resolve_snapshot_env_refs(session_mcp_servers, user_id, service).await
+        }
+        None => {
+            session_mcp_servers
+                .iter()
+                .filter(|server| !crate::kaneo_envref::server_has_env_refs(server))
+                .cloned()
+                .collect::<Vec<_>>()
+        }
+    };
+    for server in &resolved_servers {
         // Reserved name defense: the team coordination MCP must win. The inline
         // merge below OVERWRITES on name collision, so a snapshot entry named
         // `aionui-team` would otherwise replace the coordination bridge.
@@ -1971,6 +1989,7 @@ mod tests {
             TEST_USER_ID,
             "conv-1",
             test_broadcaster(),
+            None,
         )
         .await;
 
@@ -2052,6 +2071,7 @@ mod tests {
             TEST_USER_ID,
             "conv-assembly",
             test_broadcaster(),
+            None,
         )
         .await;
 
@@ -2107,6 +2127,7 @@ mod tests {
             "user-override",
             "conv-override",
             test_broadcaster(),
+            None,
         )
         .await;
 

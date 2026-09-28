@@ -108,7 +108,8 @@ pub async fn resolve_server_env_refs(
 }
 
 /// Resolve ONE env-ref into the replacement value:
-/// - `KANEO_API_URL` → the stored `base_url`
+/// - `KANEO_API_URL` / `KANEO_BASE_URL` → the stored `base_url`
+///   (`KANEO_BASE_URL` is what the upstream `kaneo-mcp` server actually reads)
 /// - anything else → the decrypted API key
 async fn resolve_value(
     service: &Arc<KaneoCredentialService>,
@@ -118,7 +119,7 @@ async fn resolve_value(
 ) -> Option<String> {
     match service.resolve(user_id, context_id).await {
         Ok(Some(credential)) => {
-            if env_key == "KANEO_API_URL" {
+            if env_key == "KANEO_API_URL" || env_key == "KANEO_BASE_URL" {
                 Some(credential.base_url)
             } else {
                 Some(credential.api_key)
@@ -173,6 +174,64 @@ pub async fn resolve_snapshot_env_refs(
         }
     }
     out
+}
+
+/// Append the project-scoped Kaneo env (`KANEO_API_URL`/`KANEO_API_KEY`) for the
+/// referenced context into the conversation's runtime env, so the AGENT PROCESS
+/// itself (its shell, and the ExecCommand tool env) can see them. This is how
+/// the `kaneo-*` skills reach the API without MCP: their curl commands read
+/// `$KANEO_API_URL` / `$KANEO_API_KEY`.
+///
+/// Resolution failure is warn-logged and leaves the runtime env untouched
+/// (skills then degrade to their documented "ask the host" behavior — they must
+/// not invent values). Existing KANEO_* entries are replaced so a resumed
+/// conversation picks up rotated credentials.
+pub async fn append_runtime_kaneo_env(
+    runtime_env: &mut Vec<(String, String)>,
+    servers: &[SessionMcpServer],
+    user_id: &str,
+    service: &Arc<KaneoCredentialService>,
+) {
+    // Collect the distinct context ids referenced anywhere in the snapshot's
+    // stdio env / headers.
+    let mut context_ids: Vec<&str> = Vec::new();
+    for server in servers {
+        let values: Vec<&String> = match &server.transport {
+            SessionMcpTransport::Stdio { env, .. } => env.values().collect(),
+            SessionMcpTransport::Http { headers, .. }
+            | SessionMcpTransport::StreamableHttp { headers, .. }
+            | SessionMcpTransport::Sse { headers, .. } => headers.values().collect(),
+        };
+        for value in values {
+            if let Some(context_id) = parse_env_ref(value) {
+                if !context_ids.contains(&context_id) {
+                    context_ids.push(context_id);
+                }
+            }
+        }
+    }
+    // Only the first context (the snapshot carries exactly one kaneo context in
+    // practice) feeds the process env; a second would be ambiguous for shell
+    // consumers anyway.
+    let Some(context_id) = context_ids.first().copied() else {
+        return;
+    };
+    match service.resolve(user_id, context_id).await {
+        Ok(Some(credential)) => {
+            runtime_env.retain(|(key, _)| key != "KANEO_API_URL" && key != "KANEO_API_KEY");
+            runtime_env.push(("KANEO_API_URL".to_owned(), credential.base_url));
+            runtime_env.push(("KANEO_API_KEY".to_owned(), credential.api_key));
+        }
+        Ok(None) => warn!(
+            context_id,
+            "kaneo_envref: no stored credential; skipping agent-process KANEO env injection"
+        ),
+        Err(err) => warn!(
+            context_id,
+            error = %err,
+            "kaneo_envref: credential resolve failed; skipping agent-process KANEO env injection"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -269,6 +328,123 @@ mod tests {
         };
         assert_eq!(env.get("KANEO_API_URL").unwrap(), "https://kaneo.example");
         assert_eq!(env.get("KANEO_API_KEY").unwrap(), "plaintext-key");
+    }
+
+    #[tokio::test]
+    async fn resolves_kaneo_base_url_alias_from_stored_credential() {
+        // The upstream `kaneo-mcp` server reads `KANEO_BASE_URL` / `KANEO_TOKEN`,
+        // not `KANEO_API_URL` / `KANEO_API_KEY`. Both base-url aliases must map
+        // to the stored `base_url` (the renderer emits all four keys).
+        let db = aionui_db::init_database_memory().await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, user_type, username, password_hash, status, session_generation, created_at, updated_at) \
+             VALUES (?, 'local', ?, '', 'active', 0, 1, 1)",
+        )
+        .bind("user-1")
+        .bind("user-1")
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let service = Arc::new(KaneoCredentialService::new(
+            Arc::new(aionui_db::SqliteClientPreferenceRepository::new(db.pool().clone())),
+            [0x42; 32],
+        ));
+        service
+            .upsert(
+                "user-1",
+                "kctx-1",
+                UpsertKaneoCredentialRequest {
+                    base_url: "https://kaneo.example".into(),
+                    agent_role: "developer".into(),
+                    project_id: Some("proj-1".into()),
+                    key_expires_at: None,
+                    api_key: "plaintext-key".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("KANEO_BASE_URL".to_string(), "kaneo:kctx-1".to_string());
+        env.insert("KANEO_TOKEN".to_string(), "kaneo:kctx-1".to_string());
+        let server = stdio_server(env);
+        let resolved = resolve_server_env_refs(&server, "user-1", &service).await.unwrap();
+        let SessionMcpTransport::Stdio { env, .. } = &resolved.transport else {
+            panic!("expected stdio");
+        };
+        assert_eq!(env.get("KANEO_BASE_URL").unwrap(), "https://kaneo.example");
+        assert_eq!(env.get("KANEO_TOKEN").unwrap(), "plaintext-key");
+    }
+
+    #[tokio::test]
+    async fn append_runtime_kaneo_env_projects_resolved_values() {
+        let db = aionui_db::init_database_memory().await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, user_type, username, password_hash, status, session_generation, created_at, updated_at) \
+             VALUES (?, 'local', ?, '', 'active', 0, 1, 1)",
+        )
+        .bind("user-1")
+        .bind("user-1")
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let service = Arc::new(KaneoCredentialService::new(
+            Arc::new(aionui_db::SqliteClientPreferenceRepository::new(db.pool().clone())),
+            [0x42; 32],
+        ));
+        service
+            .upsert(
+                "user-1",
+                "kctx-1",
+                UpsertKaneoCredentialRequest {
+                    base_url: "https://kaneo.example".into(),
+                    agent_role: "developer".into(),
+                    project_id: Some("proj-1".into()),
+                    key_expires_at: None,
+                    api_key: "plaintext-key".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        // No kaneo server in the snapshot → runtime env untouched.
+        let mut runtime_env = vec![("AIONUI_USER_ID".to_owned(), "user-1".to_owned())];
+        append_runtime_kaneo_env(&mut runtime_env, &[], "user-1", &service).await;
+        assert_eq!(runtime_env.len(), 1);
+
+        // With a kaneo snapshot server → KANEO_* appended after the AIONUI_* entries.
+        let mut env = HashMap::new();
+        env.insert("KANEO_API_URL".to_string(), "kaneo:kctx-1".to_string());
+        env.insert("KANEO_API_KEY".to_string(), "kaneo:kctx-1".to_string());
+        let kaneo = stdio_server(env);
+        append_runtime_kaneo_env(&mut runtime_env, &[kaneo], "user-1", &service).await;
+        assert!(runtime_env.contains(&("KANEO_API_URL".to_owned(), "https://kaneo.example".to_owned())));
+        assert!(runtime_env.contains(&("KANEO_API_KEY".to_owned(), "plaintext-key".to_owned())));
+
+        // Re-running replaces (rotation semantics), never duplicates.
+        let mut env2 = HashMap::new();
+        env2.insert("KANEO_API_URL".to_string(), "kaneo:kctx-1".to_string());
+        let kaneo2 = stdio_server(env2);
+        append_runtime_kaneo_env(&mut runtime_env, &[kaneo2], "user-1", &service).await;
+        assert_eq!(
+            runtime_env.iter().filter(|(k, _)| k == "KANEO_API_URL").count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn append_runtime_kaneo_env_skips_when_credential_missing() {
+        let db = aionui_db::init_database_memory().await.unwrap();
+        let service = Arc::new(KaneoCredentialService::new(
+            Arc::new(aionui_db::SqliteClientPreferenceRepository::new(db.pool().clone())),
+            [0x42; 32],
+        ));
+        let mut env = HashMap::new();
+        env.insert("KANEO_API_URL".to_string(), "kaneo:missing".to_string());
+        let kaneo = stdio_server(env);
+        let mut runtime_env = Vec::new();
+        append_runtime_kaneo_env(&mut runtime_env, &[kaneo], "user-1", &service).await;
+        assert!(runtime_env.is_empty());
     }
 
     #[tokio::test]
