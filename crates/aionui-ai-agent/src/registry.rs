@@ -819,9 +819,18 @@ fn decode_row(
     let descriptor_team_capable = aionui_session::backend_capability_descriptor(&runtime_backend)
         .map(aionui_session::BackendCapabilityDescriptor::resolved)
         .is_some_and(|capabilities| capabilities.mcp.stdio || capabilities.cli_fallback);
+    // Custom ACP agents (e.g. jcode) often persist no `backend` name; the
+    // runtime backend falls back to the agent type ("acp"). Use it here so the
+    // empty-name early-return in `is_team_capable` cannot veto an agent whose
+    // handshake capabilities clearly qualify it (CLI fallback eligibility).
+    let team_capability_backend = if persisted_backend.is_empty() {
+        runtime_backend.as_str()
+    } else {
+        persisted_backend
+    };
     let team_capable = behavior_policy.supports_team
         || descriptor_team_capable
-        || aionui_common::constants::is_team_capable(persisted_backend, handshake.agent_capabilities.as_ref());
+        || aionui_common::constants::is_team_capable(team_capability_backend, handshake.agent_capabilities.as_ref());
 
     let mut meta = AgentMetadata {
         id: row.id,
