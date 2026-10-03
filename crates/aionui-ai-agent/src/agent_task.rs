@@ -565,6 +565,16 @@ fn map_sdk_model_to_payload(m: crate::manager::acp::legacy_session_model::Legacy
         })
         .collect();
     let current_id = m.current_model_id;
+    if current_id.is_empty() {
+        // Preloaded agent-level catalog with no session-scoped selection:
+        // do not report a current model (it would leak another conversation's
+        // choice into this one's picker).
+        return ModelInfoPayload {
+            current_model_id: None,
+            current_model_label: None,
+            available_models: available,
+        };
+    }
     let current_label = available
         .iter()
         .find(|e| e.id == current_id)

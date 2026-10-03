@@ -914,6 +914,15 @@ impl AcpSession {
             });
         if let Some(current) = current {
             models.current_model_id = current.as_str().to_owned();
+        } else {
+            // No session-scoped choice (or it is not in the catalog): the
+            // incoming catalog is agent-level and its `current_model_id` is
+            // whatever the LAST session of this agent wrote back. Seeding it
+            // here would leak another conversation's model (often the default
+            // provider) into this conversation's picker before `session/load`
+            // reports the real value. Clear it so "no selection yet" renders
+            // instead; the post-`session/load` snapshot supplies the truth.
+            models.current_model_id = String::new();
         }
         models
     }

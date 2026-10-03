@@ -256,6 +256,10 @@ fn dto_from_modes(modes: &SessionModeState) -> AcpConfigOptionDto {
     }
 }
 
+fn non_empty(value: String) -> Option<String> {
+    if value.is_empty() { None } else { Some(value) }
+}
+
 fn dto_from_models(models: &LegacySessionModelState) -> AcpConfigOptionDto {
     AcpConfigOptionDto {
         id: "model".to_owned(),
@@ -264,7 +268,10 @@ fn dto_from_models(models: &LegacySessionModelState) -> AcpConfigOptionDto {
         description: None,
         category: Some("model".to_owned()),
         option_type: "select".to_owned(),
-        current_value: Some(models.current_model_id.clone()),
+        // Empty current = "no selection yet" (e.g. a preloaded agent-level
+        // catalog before session/load reports the real value). An empty string
+        // must NOT surface as a concrete current value.
+        current_value: non_empty(models.current_model_id.clone()),
         options: models
             .available_models
             .iter()

@@ -215,7 +215,53 @@ fn config_snapshot_keeps_preloaded_model_catalog_when_resume_load_advertises_emp
 }
 
 #[test]
-fn preload_advertised_catalogs_reports_seeded_catalog_counts() {
+fn preload_without_session_choice_clears_leaked_catalog_current_model() {
+    // Agent-level catalogs persist whatever the LAST session of that agent
+    // wrote back. A new conversation with no session-scoped choice must not
+    // inherit it: the picker renders "no selection" until session/load or the
+    // user picks.
+    let mut session = AcpSession::new(None, None, HashMap::new());
+    session.preload_advertised_catalogs(
+        None,
+        Some(LegacySessionModelState::new(
+            "gpt-5.4",
+            vec![
+                LegacyModelEntry::new("gpt-5.4", "GPT-5.4"),
+                LegacyModelEntry::new("gpt-5.5", "GPT-5.5"),
+            ],
+        )),
+    );
+
+    let snapshot = session.config_snapshot();
+    let model = snapshot_option(&snapshot, "model");
+    assert_eq!(model.current_value.as_deref(), None);
+    assert_eq!(model.options.len(), 2);
+}
+
+#[test]
+fn preload_clears_catalog_current_when_session_choice_is_not_in_catalog() {
+    // Same rule when the session HAS a persisted choice but the preloaded
+    // catalog does not advertise it: the agent-level current is still not
+    // this session's truth.
+    let mut session = AcpSession::new(None, Some(ModelId::new("custom-model")), HashMap::new());
+    session.preload_advertised_catalogs(
+        None,
+        Some(LegacySessionModelState::new(
+            "gpt-5.4",
+            vec![
+                LegacyModelEntry::new("gpt-5.4", "GPT-5.4"),
+                LegacyModelEntry::new("gpt-5.5", "GPT-5.5"),
+            ],
+        )),
+    );
+
+    let snapshot = session.config_snapshot();
+    let model = snapshot_option(&snapshot, "model");
+    assert_eq!(model.current_value.as_deref(), None);
+}
+
+#[test]
+fn preload_reports_seeded_catalog_counts() {
     let mut session = AcpSession::new(None, None, HashMap::new());
 
     let summary = session.preload_advertised_catalogs(
