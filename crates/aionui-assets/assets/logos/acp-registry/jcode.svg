@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 1280 1280" preserveAspectRatio="xMidYMid meet">
+<g fill="currentColor" stroke="none">
+<rect x="160" y="120" width="960" height="160" rx="80" fill="currentColor" opacity="0.35"/>
+<path d="M540 360 h200 v520 c0 150 -110 240 -280 240 c-90 0 -170 -30 -220 -80 l90 -150 c30 30 70 50 110 50 c60 0 100 -40 100 -110 Z" fill="currentColor"/>
+<rect x="820" y="360" width="200" height="160" rx="40" fill="currentColor" opacity="0.35"/>
+</g>
+</svg>
